@@ -1,5 +1,5 @@
 streamlit
-requests
 tweepy
+requests
 python-dotenv
-pandas
+pytz
