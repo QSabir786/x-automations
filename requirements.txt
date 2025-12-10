@@ -4,4 +4,4 @@ python-dotenv
 pytz
 langchain-google-genai
 langchain-core
-
+tweepy
