@@ -1,5 +1,7 @@
 streamlit
-tweepy
 requests
+base64
 python-dotenv
 pytz
+langchain-google-genai
+langchain-core

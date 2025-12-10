@@ -3,193 +3,159 @@ import requests
 import base64
 import json
 import pytz
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.prompts import ChatPromptTemplate
 
-# --- CONFIGURATION ---
+# --- PAGE CONFIG ---
+st.set_page_config(page_title="X Command Center", page_icon="🇵🇰", layout="wide")
+st.title("🇵🇰 X Command Center")
+
+# --- AUTH & SETUP ---
 try:
     GITHUB_TOKEN = st.secrets["github"]["token"]
     GITHUB_OWNER = st.secrets["github"]["owner"]
     GITHUB_REPO = st.secrets["github"]["repo"]
+    NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
+    GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
 except Exception:
-    st.error("❌ Secrets not found! Please check Streamlit Cloud Settings.")
+    st.error("❌ Secrets missing! Check Streamlit Settings.")
     st.stop()
 
-FILE_PATH = "scheduled_posts.json"
-BASE_URL = "https://api.github.com"
-HEADERS = {
-    "Authorization": f"Bearer {GITHUB_TOKEN}",
-    "Accept": "application/vnd.github+json",
-    "X-GitHub-Api-Version": "2022-11-28"
-}
+# Initialize Session State for the Text Box
+if "tweet_content" not in st.session_state:
+    st.session_state.tweet_content = ""
 
 # --- FUNCTIONS ---
-def get_data():
-    url = f"{BASE_URL}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{FILE_PATH}"
-    resp = requests.get(url, headers=HEADERS)
+def get_ai_tweet(title, url):
+    """Uses Gemini 2.5 Flash to write a tweet."""
+    llm = ChatGoogleGenerativeAI(
+        model="gemini-1.5-flash", # Flash is fast & free tier compatible
+        google_api_key=GOOGLE_API_KEY,
+        temperature=0.7
+    )
+    
+    template = """
+    You are a professional social media manager.
+    Write a viral, engaging tweet about this news story.
+    
+    Headline: {title}
+    Link: {url}
+    
+    Rules:
+    - Must be under 280 characters.
+    - Use 2-3 relevant hashtags.
+    - Be punchy and exciting.
+    - Do NOT start with "Here is a tweet". Just give the text.
+    """
+    
+    prompt = ChatPromptTemplate.from_template(template)
+    chain = prompt | llm
+    return chain.invoke({"title": title, "url": url}).content
+
+def fetch_news(topic):
+    url = f"https://newsapi.org/v2/everything?q={topic}&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
+    try:
+        resp = requests.get(url)
+        data = resp.json()
+        return data.get("articles", [])[:5] # Get top 5
+    except:
+        return []
+
+def get_github_data():
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/scheduled_posts.json"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
+    resp = requests.get(url, headers=headers)
     if resp.status_code == 200:
         data = resp.json()
         content = base64.b64decode(data["content"]).decode("utf-8")
         return json.loads(content) if content.strip() else [], data["sha"]
     return [], None
 
-def save_data(posts, sha):
-    url = f"{BASE_URL}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{FILE_PATH}"
+def save_to_github(posts, sha):
+    url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/scheduled_posts.json"
+    headers = {"Authorization": f"Bearer {GITHUB_TOKEN}", "Accept": "application/vnd.github+json"}
     content = base64.b64encode(json.dumps(posts, indent=2).encode("utf-8")).decode("utf-8")
     body = {"message": "Update schedule", "content": content, "sha": sha}
-    resp = requests.put(url, headers=HEADERS, json=body)
-    return resp.status_code in [200, 201]
+    requests.put(url, headers=headers, json=body)
 
-# --- UI LAYOUT ---
-st.set_page_config(page_title="X Pro Scheduler", page_icon="🇵🇰")
-st.title("🇵🇰 X Pro Scheduler (PKT)")
+# --- LAYOUT ---
+col_scheduler, col_news = st.columns([1, 1]) # Split screen 50/50
 
-posts, sha = get_data()
+# ==========================
+# RIGHT COLUMN: NEWS HUNTER
+# ==========================
+with col_news:
+    st.subheader("🕵️ AI News Hunter")
+    topic = st.text_input("Search Topic", value="Artificial Intelligence")
+    
+    if st.button("🔎 Fetch News"):
+        news_items = fetch_news(topic)
+        st.session_state.news_cache = news_items # Save to keep them on screen
+    
+    if "news_cache" in st.session_state:
+        for article in st.session_state.news_cache:
+            with st.container(border=True):
+                st.markdown(f"**{article['title']}**")
+                st.caption(f"Source: {article['source']['name']}")
+                
+                # THE MAGIC BUTTON
+                if st.button("✨ Generate Tweet", key=article['url']):
+                    with st.spinner("Gemini is writing..."):
+                        generated_text = get_ai_tweet(article['title'], article['url'])
+                        st.session_state.tweet_content = generated_text # Teleport text to left column
+                        st.rerun() # Refresh page to show text
 
-# TIMEZONES
-pkt_zone = pytz.timezone('Asia/Karachi')
-utc_zone = pytz.utc
+# ==========================
+# LEFT COLUMN: SCHEDULER
+# ==========================
+with col_scheduler:
+    st.subheader("📅 Scheduler")
+    
+    posts, sha = get_github_data()
+    pkt_zone = pytz.timezone('Asia/Karachi')
+    utc_zone = pytz.utc
 
-with st.expander("➕ Add New Post", expanded=True):
-    with st.form("add_post"):
-        text = st.text_area("Tweet Content (Max 280)", max_chars=280)
-
-        st.write("**Schedule Time (Pakistan Standard Time):**")
-        c1, c2, c3, c4 = st.columns([2, 1, 1, 1])
-
+    with st.form("schedule_form", clear_on_submit=True):
+        # The value comes from Session State (Auto-filled by Gemini)
+        text_input = st.text_area("Tweet Content", value=st.session_state.tweet_content, height=150, max_chars=280)
+        
+        st.write("**Schedule Time (PKT)**")
+        c1, c2, c3, c4 = st.columns([2,1,1,1])
         date_val = c1.date_input("Date")
         hour_val = c2.selectbox("Hour", range(1, 13))
         min_val = c3.selectbox("Minute", range(0, 60))
-        ampm_val = c4.selectbox("AM/PM", ["AM", "PM"])
-
-        if st.form_submit_button("Schedule Post"):
-            if not text:
-                st.warning("⚠️ Text cannot be empty.")
-            else:
-                # 1. Convert 12h AM/PM to 24h
-                hour_24 = hour_val
-                if ampm_val == "PM" and hour_val != 12:
-                    hour_24 += 12
-                if ampm_val == "AM" and hour_val == 12:
-                    hour_24 = 0
-
-                # 2. Create Naive Datetime
-                dt_naive = datetime.combine(date_val, time(hour_24, min_val))
-
-                # 3. Make it "Aware" (Label it as Pakistan Time)
-                dt_pkt = pkt_zone.localize(dt_naive)
-
-                # 4. Convert to UTC (For the Server)
-                dt_utc = dt_pkt.astimezone(utc_zone)
-
-                posts.append({"text": text, "schedule_time": dt_utc.isoformat()})
-
-                if save_data(posts, sha):
-                    st.success(f"✅ Scheduled for {hour_val}:{min_val:02d} {ampm_val} PKT")
-                    st.rerun()
-                else:
-                    st.error("Failed to save.")
-
-st.subheader(f"Queue ({len(posts)})")
-if posts:
-    posts.sort(key=lambda x: x['schedule_time'])
-    for i, p in enumerate(posts):
-        # Read UTC time from file
-        dt_utc = datetime.fromisoformat(p['schedule_time'])
-
-        # Convert UTC back to PKT for Display
-        dt_pkt_display = dt_utc.astimezone(pkt_zone)
-        display_str = dt_pkt_display.strftime('%Y-%m-%d %I:%M %p')
-
-        with st.container(border=True):
-            st.markdown(f"⏳ **{display_str} PKT**")
-            st.text(p['text'])
-            if st.button("🗑️ Delete", key=f"del_{i}"):
-                posts.pop(i)
-                save_data(posts, sha)
-                st.rerun()
-else:
-    st.info("No posts in queue.")
-
-
-
-# import streamlit as st
-# import requests
-# import base64
-# import json
-# from datetime import datetime, timezone
-
-# # --- CONFIGURATION ---
-# # Uses Streamlit Secrets (Works on Cloud)
-# try:
-#     GITHUB_TOKEN = st.secrets["github"]["token"]
-#     GITHUB_OWNER = st.secrets["github"]["owner"]
-#     GITHUB_REPO = st.secrets["github"]["repo"]
-# except Exception:
-#     st.error("❌ Secrets not found! If running locally, make sure you have .streamlit/secrets.toml")
-#     st.stop()
-
-# FILE_PATH = "scheduled_posts.json"
-# BASE_URL = "https://api.github.com"
-# HEADERS = {
-#     "Authorization": f"Bearer {GITHUB_TOKEN}",
-#     "Accept": "application/vnd.github+json",
-#     "X-GitHub-Api-Version": "2022-11-28"
-# }
-
-# # --- FUNCTIONS ---
-# def get_data():
-#     url = f"{BASE_URL}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{FILE_PATH}"
-#     resp = requests.get(url, headers=HEADERS)
-#     if resp.status_code == 200:
-#         data = resp.json()
-#         content = base64.b64decode(data["content"]).decode("utf-8")
-#         return json.loads(content) if content.strip() else [], data["sha"]
-#     return [], None
-
-# def save_data(posts, sha):
-#     url = f"{BASE_URL}/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/{FILE_PATH}"
-#     content = base64.b64encode(json.dumps(posts, indent=2).encode("utf-8")).decode("utf-8")
-#     body = {"message": "Update schedule", "content": content, "sha": sha}
-#     resp = requests.put(url, headers=HEADERS, json=body)
-#     return resp.status_code in [200, 201]
-
-# # --- UI LAYOUT ---
-# st.set_page_config(page_title="X Scheduler", page_icon="🐦")
-# st.title("🐦 X (Twitter) Auto-Scheduler")
-
-# # 1. Show Current Posts
-# posts, sha = get_data()
-
-# with st.expander("➕ Add New Post", expanded=True):
-#     with st.form("add_post"):
-#         text = st.text_area("Tweet Content (Max 280)", max_chars=280)
-#         c1, c2 = st.columns(2)
-#         date = c1.date_input("Date")
-#         time = c2.time_input("Time (UTC)")
-#         if st.form_submit_button("Schedule"):
-#             dt = datetime.combine(date, time).replace(tzinfo=timezone.utc)
-#             posts.append({"text": text, "schedule_time": dt.isoformat()})
-#             if save_data(posts, sha):
-#                 st.success("Scheduled!")
-#                 st.rerun()
-#             else:
-#                 st.error("Failed to save.")
-
-# st.subheader(f"Queue ({len(posts)})")
-# if posts:
-#     # Sort by time
-#     posts.sort(key=lambda x: x['schedule_time'])
-#     for i, p in enumerate(posts):
-#         dt = datetime.fromisoformat(p['schedule_time'])
-#         is_past = dt < datetime.now(timezone.utc)
-#         status_icon = "⚠️ OVERDUE" if is_past else "⏳ Upcoming"
+        ampm = c4.selectbox("AM/PM", ["AM", "PM"])
         
-#         with st.container(border=True):
-#             st.markdown(f"**{status_icon}:** `{dt.strftime('%Y-%m-%d %H:%M UTC')}`")
-#             st.text(p['text'])
-#             if st.button("🗑️ Delete", key=f"del_{i}"):
-#                 posts.pop(i)
-#                 save_data(posts, sha)
-#                 st.rerun()
-# else:
-#     st.info("No posts in queue.")
+        if st.form_submit_button("🚀 Schedule Post"):
+            if not text_input:
+                st.warning("Write something first!")
+            else:
+                # Time conversion logic
+                h24 = hour_val
+                if ampm == "PM" and hour_val != 12: h24 += 12
+                if ampm == "AM" and hour_val == 12: h24 = 0
+                
+                dt_naive = datetime.combine(date_val, time(h24, min_val))
+                dt_pkt = pkt_zone.localize(dt_naive)
+                dt_utc = dt_pkt.astimezone(utc_zone)
+                
+                posts.append({"text": text_input, "schedule_time": dt_utc.isoformat()})
+                save_to_github(posts, sha)
+                
+                # Clear the box after saving
+                st.session_state.tweet_content = "" 
+                st.success("Scheduled!")
+                st.rerun()
+
+    st.divider()
+    st.write(f"**Queue ({len(posts)}):**")
+    # Show queue logic (Simplified for space)
+    for i, p in enumerate(posts):
+        dt = datetime.fromisoformat(p['schedule_time']).astimezone(pkt_zone)
+        with st.expander(f"{dt.strftime('%I:%M %p')} - {p['text'][:30]}..."):
+            st.text(p['text'])
+            if st.button("Delete", key=f"d_{i}"):
+                posts.pop(i)
+                save_to_github(posts, sha)
+                st.rerun()
