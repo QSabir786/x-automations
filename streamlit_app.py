@@ -3,15 +3,36 @@ import requests
 import base64
 import json
 import pytz
+import random
 from datetime import datetime, time, timedelta
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="X Command Center", page_icon="🇵🇰", layout="wide")
-st.title("🇵🇰 X Command Center")
+st.title("🇵🇰 X Command Center (News + Images)")
 
-# --- AUTH & SETUP ---
+# --- AUTHENTICATION ---
+def check_password():
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+    if st.session_state["password_correct"]:
+        return True
+    
+    st.write("🔒 Login Required")
+    pwd = st.text_input("Enter Password", type="password")
+    if st.button("Log In"):
+        if pwd == st.secrets["APP_PASSWORD"]:
+            st.session_state["password_correct"] = True
+            st.rerun()
+        else:
+            st.error("❌ Wrong password")
+    return False
+
+if not check_password():
+    st.stop()
+
+# --- SETUP KEYS ---
 try:
     GITHUB_TOKEN = st.secrets["github"]["token"]
     GITHUB_OWNER = st.secrets["github"]["owner"]
@@ -22,43 +43,67 @@ except Exception:
     st.error("❌ Secrets missing! Check Streamlit Settings.")
     st.stop()
 
-# Initialize Session State for the Text Box
+# Session State for Content
 if "tweet_content" not in st.session_state:
     st.session_state.tweet_content = ""
+if "image_url" not in st.session_state:
+    st.session_state.image_url = ""
 
 # --- FUNCTIONS ---
-def get_ai_tweet(title, url):
-    """Uses Gemini 2.5 Flash to write a tweet."""
-    llm = ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash", # Flash is fast & free tier compatible
-        google_api_key=GOOGLE_API_KEY,
-        temperature=0.7
-    )
+def get_ai_content(title, url):
+    """Uses Gemini to write a tweet AND an image prompt."""
+    try:
+        llm = ChatGoogleGenerativeAI(
+            model="gemini-1.5-flash",
+            google_api_key=GOOGLE_API_KEY,
+            temperature=0.7
+        )
+        
+        # We ask Gemini for TWO things: The Tweet and a Prompt for the image generator
+        template = """
+        You are a tech influencer on X (Twitter).
+        
+        TASK 1: Write a viral tweet about this news.
+        - Headline: {title}
+        - Link: {url}
+        - Style: Hype, Insider, Professional.
+        - Max length: 250 chars.
+        - Include 2 hashtags.
+        
+        TASK 2: Write a short, vivid image prompt to generate a picture for this tweet.
+        - Describe a futuristic, cyberpunk, or tech-abstract image.
+        - No text inside the image.
+        
+        OUTPUT FORMAT:
+        Tweet: [Your tweet here]
+        Image Prompt: [Your image prompt here]
+        """
+        
+        prompt = ChatPromptTemplate.from_template(template)
+        chain = prompt | llm
+        result = chain.invoke({"title": title, "url": url}).content
+        
+        # Parse the result
+        tweet_text = result.split("Image Prompt:")[0].replace("Tweet:", "").strip()
+        img_prompt = result.split("Image Prompt:")[1].strip()
+        
+        return tweet_text, img_prompt
+        
+    except Exception as e:
+        return f"Error: {str(e)}", "tech abstract blue background"
 
-    template = """
-    You are a professional social media manager.
-    Write a viral, engaging tweet about this news story.
-
-    Headline: {title}
-    Link: {url}
-
-    Rules:
-    - Must be under 280 characters.
-    - Use 2-3 relevant hashtags.
-    - Be punchy and exciting.
-    - Do NOT start with "Here is a tweet". Just give the text.
-    """
-
-    prompt = ChatPromptTemplate.from_template(template)
-    chain = prompt | llm
-    return chain.invoke({"title": title, "url": url}).content
-
-def fetch_news(topic):
-    url = f"https://newsapi.org/v2/everything?q={topic}&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
+def fetch_tech_news():
+    """Hunts for SPECIFIC high-tech news."""
+    # Advanced Query: specific companies and specific action words
+    query = '(OpenAI OR Gemini OR "Claude 3" OR "Llama 3" OR "Nvidia" OR "Mistral") AND (launch OR release OR update OR "new model" OR benchmark)'
+    
+    # Sort by 'publishedAt' to get the absolute newest stuff
+    url = f"https://newsapi.org/v2/everything?q={query}&domains=techcrunch.com,wired.com,theverge.com,venturebeat.com&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
+    
     try:
         resp = requests.get(url)
         data = resp.json()
-        return data.get("articles", [])[:5] # Get top 5
+        return data.get("articles", [])[:6] # Get top 6
     except:
         return []
 
@@ -80,45 +125,57 @@ def save_to_github(posts, sha):
     requests.put(url, headers=headers, json=body)
 
 # --- LAYOUT ---
-col_scheduler, col_news = st.columns([1, 1]) # Split screen 50/50
+col_scheduler, col_news = st.columns([1, 1])
 
 # ==========================
 # RIGHT COLUMN: NEWS HUNTER
 # ==========================
 with col_news:
-    st.subheader("🕵️ AI News Hunter")
-    topic = st.text_input("Search Topic", value="Artificial Intelligence")
-
-    if st.button("🔎 Fetch News"):
-        news_items = fetch_news(topic)
-        st.session_state.news_cache = news_items # Save to keep them on screen
-
+    st.subheader("🕵️ Tech News Hunter")
+    
+    if st.button("🔎 Fetch Latest Tech News"):
+        news_items = fetch_tech_news()
+        st.session_state.news_cache = news_items
+    
     if "news_cache" in st.session_state:
         for article in st.session_state.news_cache:
             with st.container(border=True):
                 st.markdown(f"**{article['title']}**")
-                st.caption(f"Source: {article['source']['name']}")
-
+                st.caption(f"Source: {article['source']['name']} • {article['publishedAt'][:10]}")
+                
                 # THE MAGIC BUTTON
-                if st.button("✨ Generate Tweet", key=article['url']):
-                    with st.spinner("Gemini is writing..."):
-                        generated_text = get_ai_tweet(article['title'], article['url'])
-                        st.session_state.tweet_content = generated_text # Teleport text to left column
-                        st.rerun() # Refresh page to show text
+                if st.button("✨ Generate Tweet + Image", key=article['url']):
+                    with st.spinner("Gemini is thinking & Painting..."):
+                        # 1. Get Text & Image Prompt from Gemini
+                        tweet, img_prompt = get_ai_content(article['title'], article['url'])
+                        
+                        # 2. Generate Image URL (using Pollinations.ai - Free/Unlimited)
+                        clean_prompt = img_prompt.replace(" ", "%20")
+                        generated_image_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1080&height=1080&nologo=true"
+                        
+                        # 3. Save to Session
+                        st.session_state.tweet_content = tweet
+                        st.session_state.image_url = generated_image_url
+                        st.rerun()
 
 # ==========================
 # LEFT COLUMN: SCHEDULER
 # ==========================
 with col_scheduler:
     st.subheader("📅 Scheduler")
-
+    
     posts, sha = get_github_data()
     pkt_zone = pytz.timezone('Asia/Karachi')
     utc_zone = pytz.utc
 
     with st.form("schedule_form", clear_on_submit=True):
-        # The value comes from Session State (Auto-filled by Gemini)
+        # Text Input (Auto-filled)
         text_input = st.text_area("Tweet Content", value=st.session_state.tweet_content, height=150, max_chars=280)
+        
+        # Image Preview (Auto-filled)
+        if st.session_state.image_url:
+            st.image(st.session_state.image_url, caption="AI Generated Image (Right Click to Save)", width=300)
+            st.info("⚠️ Note: To post images automatically, we need to upgrade the backend. For now, save this image and attach manually if posting directly.")
 
         st.write("**Schedule Time (PKT)**")
         c1, c2, c3, c4 = st.columns([2,1,1,1])
@@ -126,37 +183,39 @@ with col_scheduler:
         hour_val = c2.selectbox("Hour", range(1, 13))
         min_val = c3.selectbox("Minute", range(0, 60))
         ampm = c4.selectbox("AM/PM", ["AM", "PM"])
-
+        
         if st.form_submit_button("🚀 Schedule Post"):
             if not text_input:
                 st.warning("Write something first!")
             else:
-                # Time conversion logic
                 h24 = hour_val
                 if ampm == "PM" and hour_val != 12: h24 += 12
                 if ampm == "AM" and hour_val == 12: h24 = 0
-
+                
                 dt_naive = datetime.combine(date_val, time(h24, min_val))
                 dt_pkt = pkt_zone.localize(dt_naive)
                 dt_utc = dt_pkt.astimezone(utc_zone)
-
+                
+                # Currently saving TEXT ONLY. 
+                # (Image saving requires backend upgrade, ask me if you want that!)
                 posts.append({"text": text_input, "schedule_time": dt_utc.isoformat()})
                 save_to_github(posts, sha)
-
-                # Clear the box after saving
-                st.session_state.tweet_content = ""
+                
+                st.session_state.tweet_content = "" 
+                st.session_state.image_url = "" # Clear image
                 st.success("Scheduled!")
                 st.rerun()
 
     st.divider()
     st.write(f"**Queue ({len(posts)}):**")
-    # Show queue logic (Simplified for space)
-    for i, p in enumerate(posts):
-        dt = datetime.fromisoformat(p['schedule_time']).astimezone(pkt_zone)
-        with st.expander(f"{dt.strftime('%I:%M %p')} - {p['text'][:30]}..."):
-            st.text(p['text'])
-            if st.button("Delete", key=f"d_{i}"):
-                posts.pop(i)
-                save_to_github(posts, sha)
-                st.rerun()
-
+    if posts:
+        posts.sort(key=lambda x: x['schedule_time'])
+        for i, p in enumerate(posts):
+            dt_utc = datetime.fromisoformat(p['schedule_time'])
+            dt_pkt = dt_utc.astimezone(pkt_zone)
+            with st.expander(f"{dt_pkt.strftime('%I:%M %p')} - {p['text'][:30]}..."):
+                st.text(p['text'])
+                if st.button("Delete", key=f"d_{i}"):
+                    posts.pop(i)
+                    save_to_github(posts, sha)
+                    st.rerun()
