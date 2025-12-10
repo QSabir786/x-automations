@@ -54,7 +54,7 @@ if "news_cache" not in st.session_state: st.session_state.news_cache = []
 
 def get_gemini_model(temp=0.7):
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=temp
     )
@@ -291,3 +291,4 @@ elif selection == "Tech News (Reddit)":
                     with st.spinner("Drafting..."):
                         tweet = generate_news_tweet(article['title'], article['link'])
                         switch_to_scheduler(tweet)
+
