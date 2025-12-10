@@ -53,7 +53,7 @@ if "lead_gen_suggestions" not in st.session_state: st.session_state.lead_gen_sug
 
 def get_gemini_model(temp=0.7):
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=temp
     )
@@ -277,3 +277,4 @@ elif selection == "AI News Hunter":
                     with st.spinner("Analyzing..."):
                         tweet = generate_news_tweet(article['title'], article['url'])
                         switch_to_scheduler(tweet)
+
