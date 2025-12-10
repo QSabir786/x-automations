@@ -39,7 +39,6 @@ try:
     GITHUB_OWNER = st.secrets["github"]["owner"]
     GITHUB_REPO = st.secrets["github"]["repo"]
     GOOGLE_API_KEY = st.secrets["GOOGLE_API_KEY"]
-    # NewsAPI Key removed (We use Reddit now)
 except Exception:
     st.error("❌ Secrets missing! Check Streamlit Settings.")
     st.stop()
@@ -48,7 +47,7 @@ except Exception:
 if "tweet_content" not in st.session_state: st.session_state.tweet_content = ""
 if "page_selection" not in st.session_state: st.session_state.page_selection = "Post Scheduler"
 if "lead_gen_suggestions" not in st.session_state: st.session_state.lead_gen_suggestions = []
-if "news_cache" not in st.session_state: st.session_state.news_cache = []
+if "news_suggestions" not in st.session_state: st.session_state.news_suggestions = []
 
 # --- HELPER FUNCTIONS ---
 
@@ -82,33 +81,11 @@ def switch_to_scheduler(text):
     st.session_state.page_selection = "Post Scheduler"
     st.rerun()
 
-# --- NEW: REDDIT TECH NEWS FETCHER ---
-def fetch_reddit_tech_news():
-    """Fetches trending tech news from Reddit RSS."""
-    # Focusing on News & Future Tech
-    rss_url = "https://www.reddit.com/r/technology+gadgets+Futurology+ArtificialIntelligence/top.rss?t=day&limit=30"
-    
-    try:
-        feed = feedparser.parse(rss_url)
-        entries = feed.entries
-        random.shuffle(entries) # Shuffle for freshness
-        
-        posts = []
-        for entry in entries[:10]:
-            posts.append({
-                "title": entry.title,
-                "link": entry.link,
-                "source": "Reddit Tech"
-            })
-        return posts
-    except Exception as e:
-        st.error(f"RSS Error: {e}")
-        return []
+# --- FETCHERS (REDDIT RSS) ---
 
-# --- REDDIT VIRAL FETCHER (LEAD GEN) ---
-def fetch_reddit_viral():
-    """Fetches viral discussions for Lead Gen."""
-    rss_url = "https://www.reddit.com/r/SaaS+Entrepreneur+Marketing+OpenAI/top.rss?t=week&limit=50"
+def fetch_reddit_viral_lead_gen():
+    """Fetches viral discussions for Lead Gen (SaaS, Business)."""
+    rss_url = "https://www.reddit.com/r/SaaS+Entrepreneur+Marketing+Agency/top.rss?t=week&limit=50"
     try:
         feed = feedparser.parse(rss_url)
         entries = feed.entries
@@ -117,59 +94,79 @@ def fetch_reddit_viral():
         for entry in entries[:15]:
             posts.append(f"Title: {entry.title}\nLink: {entry.link}")
         return posts
-    except Exception as e:
+    except Exception:
+        return []
+
+def fetch_reddit_tech_news():
+    """Fetches HARDCORE AI News (LocalLLaMA, LangChain, OpenAI)."""
+    # Focusing on AI Agents, Coding, and New Models
+    rss_url = "https://www.reddit.com/r/LocalLLaMA+LangChain+OpenAI+ArtificialIntelligence/top.rss?t=day&limit=50"
+    try:
+        feed = feedparser.parse(rss_url)
+        entries = feed.entries
+        # Filter for actual news (exclude help requests)
+        clean_entries = [e for e in entries if "help" not in e.title.lower() and "?" not in e.title]
+        random.shuffle(clean_entries)
+        
+        posts = []
+        for entry in clean_entries[:15]:
+            posts.append(f"Headline: {entry.title}\nLink: {entry.link}")
+        return posts
+    except Exception:
         return []
 
 # --- AI GENERATORS ---
 
-def generate_10_lead_posts(reddit_data):
-    """Generates 10 Lead Gen Tweets with STRICT LIMITS."""
+def generate_lead_posts_batch(reddit_data):
+    """Generates 10 Lead Gen Tweets."""
     llm = get_gemini_model(temp=0.8)
-    
     template = """
-    You are a Viral Social Media Ghostwriter.
-    Analyze these Reddit discussions and write 10 "Lead Gen" tweets.
+    You are a Viral B2B Ghostwriter.
+    Read these Reddit threads and create 10 DISTINCT "Lead Gen" tweets.
     
-    CRITICAL RULES:
-    1. LENGTH: Every tweet MUST be under 280 characters. NO EXCEPTIONS.
-    2. HASHTAGS: Every tweet MUST end with 2-3 viral hashtags (e.g., #SaaS #AI #Growth).
-    3. TONE: Punchy, "No-BS", controversial or insightful.
-    4. FORMAT: Hook -> Problem -> Solution -> CTA.
+    STRICT RULES:
+    1. LENGTH: MUST be under 280 characters. Short & Punchy.
+    2. HASHTAGS: End with 2 hashtags (e.g. #SaaS #AI).
+    3. STYLE: Hook -> Pain Point -> Solution -> CTA.
     
-    INPUT DATA:
+    INPUT:
     {reddit_data}
     
-    OUTPUT FORMAT (JSON ONLY):
-    [
-      {{"topic": "Growth", "tweet": "Your tweet here... #SaaS #Growth", "source": "Reddit Title"}}
-    ]
+    OUTPUT JSON:
+    [{{ "topic": "...", "tweet": "...", "source": "..." }}]
     """
-    
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | JsonOutputParser()
     context = "\n\n".join(reddit_data) 
     return chain.invoke({"reddit_data": context})
 
-def generate_news_tweet(title, url):
-    """Generates a Tech News Tweet."""
-    llm = get_gemini_model(temp=0.5)
+def generate_news_posts_batch(reddit_data):
+    """Generates 10 Tech News Tweets."""
+    llm = get_gemini_model(temp=0.6)
     template = """
-    You are a Tech Reporter. Write a tweet about this news.
-    Headline: {title}
-    Link: {url}
+    You are a Tech Twitter Influencer (like @swyx or @fireship).
+    Read these Reddit headlines and create 10 News Tweets.
     
-    Rules:
-    - STRICTLY under 280 characters.
-    - Include link.
-    - End with 2 relevant hashtags (e.g. #TechNews #AI).
-    - No emojis.
+    STRICT RULES:
+    1. LENGTH: MUST be under 280 characters.
+    2. CONTENT: Focus on AI Agents, LangChain, LocalLLaMA, New Models.
+    3. STYLE: "Vibe coding", exciting, informative.
+    4. INCLUDE LINK: Put the link at the end.
+    
+    INPUT:
+    {reddit_data}
+    
+    OUTPUT JSON:
+    [{{ "topic": "AI News", "tweet": "Headline... Thoughts... Link... #AI", "source": "Reddit Title" }}]
     """
     prompt = ChatPromptTemplate.from_template(template)
-    return prompt | llm | (lambda x: x.invoke({"title": title, "url": url}).content)
+    chain = prompt | llm | JsonOutputParser()
+    context = "\n\n".join(reddit_data) 
+    return chain.invoke({"reddit_data": context})
 
 # --- NAVIGATION ---
 st.sidebar.title("🚀 Agency Panel")
-selection = st.sidebar.radio("Go to:", ["Post Scheduler", "Lead Gen (Viral)", "Tech News (Reddit)"], key="nav_radio")
+selection = st.sidebar.radio("Go to:", ["Post Scheduler", "Lead Gen (Viral)", "Tech News (AI/Code)"], key="nav_radio")
 
 if st.session_state.page_selection != selection:
     st.session_state.page_selection = selection
@@ -186,7 +183,7 @@ if selection == "Post Scheduler":
     with st.form("schedule_form", clear_on_submit=True):
         text_input = st.text_area("Tweet Content", value=st.session_state.tweet_content, height=150, max_chars=280)
         
-        # --- NEW: IMAGE UPLOADER ---
+        # IMAGE UPLOADER
         uploaded_file = st.file_uploader("📷 Attach Image (Optional)", type=["png", "jpg", "jpeg"])
         
         st.write("**Schedule Time (PKT)**")
@@ -208,24 +205,19 @@ if selection == "Post Scheduler":
                 dt_pkt = pkt_zone.localize(dt_naive)
                 dt_utc = dt_pkt.astimezone(utc_zone)
                 
-                # Handle Image Logic (Convert to Base64 for storage)
                 image_data = None
-                if uploaded_file is not None:
-                    # Warning: Large images can slow down the repo!
+                if uploaded_file:
                     bytes_data = uploaded_file.getvalue()
                     base64_str = base64.b64encode(bytes_data).decode('utf-8')
                     image_data = f"data:image/png;base64,{base64_str}"
-                    st.info("⚠️ Image attached! (Note: Backend update required to post images)")
+                    st.info("Image saved to schedule! (Backend update needed to post)")
 
-                new_post = {
+                posts.append({
                     "text": text_input, 
                     "schedule_time": dt_utc.isoformat(),
-                    "image_data": image_data # Storing image in JSON
-                }
-                
-                posts.append(new_post)
+                    "image_data": image_data
+                })
                 save_to_github(posts, sha)
-                
                 st.session_state.tweet_content = "" 
                 st.success(f"Scheduled for {hour_val}:{min_val:02d} {ampm} PKT")
                 st.rerun()
@@ -237,12 +229,10 @@ if selection == "Post Scheduler":
         for i, p in enumerate(posts):
             dt_utc = datetime.fromisoformat(p['schedule_time'])
             dt_pkt = dt_utc.astimezone(pkt_zone)
-            with st.expander(f"{dt_pkt.strftime('%Y-%m-%d %I:%M %p')} - {p['text'][:30]}..."):
+            with st.expander(f"{dt_pkt.strftime('%I:%M %p')} - {p['text'][:30]}..."):
                 st.text(p['text'])
-                # Show image preview if exists
                 if p.get("image_data"):
-                    st.image(p["image_data"], width=200, caption="Attached Image")
-                
+                    st.image(p["image_data"], width=150)
                 if st.button("Delete", key=f"d_{i}"):
                     posts.pop(i)
                     save_to_github(posts, sha)
@@ -251,16 +241,15 @@ if selection == "Post Scheduler":
 # --- PAGE 2: LEAD GEN (VIRAL) ---
 elif selection == "Lead Gen (Viral)":
     st.title("⚡ Viral Lead Gen")
-    st.caption("Scrapes Reddit for pain points -> Generates Viral Tweets under 280 chars.")
+    st.caption("Scrapes r/SaaS & r/Entrepreneur for pain points.")
     
-    if st.button("🎲 Fetch Reddit & Generate Posts"):
+    if st.button("🎲 Fetch & Generate 10 Posts"):
         with st.spinner("Analyzing Viral Trends..."):
-            reddit_threads = fetch_reddit_viral()
-            if reddit_threads:
-                suggestions = generate_10_lead_posts(reddit_threads)
-                st.session_state.lead_gen_suggestions = suggestions
+            threads = fetch_reddit_viral_lead_gen()
+            if threads:
+                st.session_state.lead_gen_suggestions = generate_lead_posts_batch(threads)
             else:
-                st.error("Reddit RSS busy. Try again.")
+                st.error("Reddit RSS busy.")
 
     if st.session_state.lead_gen_suggestions:
         st.markdown("### 🎯 Pick a Winner")
@@ -271,24 +260,30 @@ elif selection == "Lead Gen (Viral)":
                     st.write(post['tweet'])
                     st.caption(f"Topic: {post.get('topic')} | Len: {len(post['tweet'])}")
                 with c2:
-                    if st.button("🚀 Use This", key=f"use_{idx}"):
+                    if st.button("🚀 Use This", key=f"lg_{idx}"):
                         switch_to_scheduler(post['tweet'])
 
-# --- PAGE 3: TECH NEWS (REDDIT) ---
-elif selection == "Tech News (Reddit)":
-    st.title("📰 Top Tech News")
-    st.caption("Fresh from r/technology & r/ArtificialIntelligence")
+# --- PAGE 3: TECH NEWS (AI/CODE) ---
+elif selection == "Tech News (AI/Code)":
+    st.title("🤖 AI & Code News")
+    st.caption("Fresh from r/LocalLLaMA, r/LangChain & r/OpenAI.")
     
-    if st.button("🔄 Refresh News"):
-        with st.spinner("Fetching RSS..."):
-            st.session_state.news_cache = fetch_reddit_tech_news()
-    
-    if st.session_state.news_cache:
-        for article in st.session_state.news_cache:
-            with st.container(border=True):
-                st.markdown(f"**{article['title']}**")
-                if st.button("✨ Write Tweet", key=article['link']):
-                    with st.spinner("Drafting..."):
-                        tweet = generate_news_tweet(article['title'], article['link'])
-                        switch_to_scheduler(tweet)
+    if st.button("🔄 Fetch & Generate 10 News Tweets"):
+        with st.spinner("Reading AI News... Drafting Tweets..."):
+            threads = fetch_reddit_tech_news()
+            if threads:
+                st.session_state.news_suggestions = generate_news_posts_batch(threads)
+            else:
+                st.error("Reddit RSS busy.")
 
+    if st.session_state.news_suggestions:
+        st.markdown("### 📰 Latest AI News Drafts")
+        for idx, post in enumerate(st.session_state.news_suggestions):
+            with st.container(border=True):
+                c1, c2 = st.columns([4, 1])
+                with c1:
+                    st.write(post['tweet'])
+                    st.caption(f"Source: {post.get('source')} | Len: {len(post['tweet'])}")
+                with c2:
+                    if st.button("🚀 Use This", key=f"news_{idx}"):
+                        switch_to_scheduler(post['tweet'])
