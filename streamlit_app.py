@@ -30,7 +30,7 @@ if "tweet_content" not in st.session_state:
 def get_ai_tweet(title, url):
     """Uses Gemini 2.5 Flash to write a tweet."""
     llm = ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash", # Flash is fast & free tier compatible
+        model="gemini-2.5-flash", # Flash is fast & free tier compatible
         google_api_key=GOOGLE_API_KEY,
         temperature=0.7
     )
@@ -159,3 +159,4 @@ with col_scheduler:
                 posts.pop(i)
                 save_to_github(posts, sha)
                 st.rerun()
+
