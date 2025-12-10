@@ -10,7 +10,7 @@ from langchain_core.prompts import ChatPromptTemplate
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="X Command Center", page_icon="🇵🇰", layout="wide")
-st.title("🇵🇰 X Command Center (News + Images)")
+st.title("🇵🇰 X Command Center (Pro Mode)")
 
 # --- AUTHENTICATION ---
 def check_password():
@@ -18,7 +18,6 @@ def check_password():
         st.session_state["password_correct"] = False
     if st.session_state["password_correct"]:
         return True
-    
     st.write("🔒 Login Required")
     pwd = st.text_input("Enter Password", type="password")
     if st.button("Log In"):
@@ -43,36 +42,36 @@ except Exception:
     st.error("❌ Secrets missing! Check Streamlit Settings.")
     st.stop()
 
-# Session State for Content
-if "tweet_content" not in st.session_state:
-    st.session_state.tweet_content = ""
-if "image_url" not in st.session_state:
-    st.session_state.image_url = ""
+if "tweet_content" not in st.session_state: st.session_state.tweet_content = ""
+if "image_url" not in st.session_state: st.session_state.image_url = ""
 
 # --- FUNCTIONS ---
 def get_ai_content(title, url):
-    """Uses Gemini to write a tweet AND an image prompt."""
+    """Uses Gemini to write a PRO tweet AND a MODERN image prompt."""
     try:
         llm = ChatGoogleGenerativeAI(
             model="gemini-2.5-flash",
             google_api_key=GOOGLE_API_KEY,
-            temperature=0.7
+            temperature=0.5 # Lower temperature = less random, more professional
         )
         
-        # We ask Gemini for TWO things: The Tweet and a Prompt for the image generator
+        # UPDATED PROMPT FOR PROFESSIONALISM
         template = """
-        You are a tech influencer on X (Twitter).
+        You are a senior tech analyst on X (Twitter).
         
-        TASK 1: Write a viral tweet about this news.
+        TASK 1: Write a professional, insightful tweet.
         - Headline: {title}
         - Link: {url}
-        - Style: Hype, Insider, Professional.
+        - Style: Concise, analytical, professional. Like a tech journalist.
+        - NO EMOJIS. NO asterisks (**).
         - Max length: 250 chars.
-        - Include 2 hashtags.
+        - Include 2 professional hashtags (e.g., #TechNews, #AI).
         
-        TASK 2: Write a short, vivid image prompt to generate a picture for this tweet.
-        - Describe a futuristic, cyberpunk, or tech-abstract image.
-        - No text inside the image.
+        TASK 2: Write a prompt for a modern, abstract tech image.
+        - Style: Futuristic, clean, high-tech, modern design.
+        - Colors: Deep blues, purples, electric cyan, dark mode aesthetic.
+        - Content: Abstract data visualization, circuit patterns, geometric shapes.
+        - CRITICAL: DO NOT include any text, logos, or letters in the image description.
         
         OUTPUT FORMAT:
         Tweet: [Your tweet here]
@@ -83,27 +82,21 @@ def get_ai_content(title, url):
         chain = prompt | llm
         result = chain.invoke({"title": title, "url": url}).content
         
-        # Parse the result
         tweet_text = result.split("Image Prompt:")[0].replace("Tweet:", "").strip()
         img_prompt = result.split("Image Prompt:")[1].strip()
-        
         return tweet_text, img_prompt
         
     except Exception as e:
-        return f"Error: {str(e)}", "tech abstract blue background"
+        return f"Error: {str(e)}", "abstract tech blue purple"
 
 def fetch_tech_news():
     """Hunts for SPECIFIC high-tech news."""
-    # Advanced Query: specific companies and specific action words
-    query = '(OpenAI OR Gemini OR "Claude 3" OR "Llama 3" OR "Nvidia" OR "Mistral") AND (launch OR release OR update OR "new model" OR benchmark)'
-    
-    # Sort by 'publishedAt' to get the absolute newest stuff
-    url = f"https://newsapi.org/v2/everything?q={query}&domains=techcrunch.com,wired.com,theverge.com,venturebeat.com&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
-    
+    query = '(OpenAI OR Gemini OR "Claude 3" OR "Llama 3" OR "Nvidia" OR Waymo) AND (launch OR release OR update OR growth OR benchmark)'
+    url = f"https://newsapi.org/v2/everything?q={query}&domains=techcrunch.com,wired.com,theverge.com,reuters.com&sortBy=publishedAt&language=en&apiKey={NEWS_API_KEY}"
     try:
         resp = requests.get(url)
         data = resp.json()
-        return data.get("articles", [])[:6] # Get top 6
+        return data.get("articles", [])[:6]
     except:
         return []
 
@@ -127,13 +120,9 @@ def save_to_github(posts, sha):
 # --- LAYOUT ---
 col_scheduler, col_news = st.columns([1, 1])
 
-# ==========================
-# RIGHT COLUMN: NEWS HUNTER
-# ==========================
 with col_news:
-    st.subheader("🕵️ Tech News Hunter")
-    
-    if st.button("🔎 Fetch Latest Tech News"):
+    st.subheader("🕵️ Pro Tech News")
+    if st.button("🔎 Fetch News"):
         news_items = fetch_tech_news()
         st.session_state.news_cache = news_items
     
@@ -141,41 +130,26 @@ with col_news:
         for article in st.session_state.news_cache:
             with st.container(border=True):
                 st.markdown(f"**{article['title']}**")
-                st.caption(f"Source: {article['source']['name']} • {article['publishedAt'][:10]}")
-                
-                # THE MAGIC BUTTON
-                if st.button("✨ Generate Tweet + Image", key=article['url']):
-                    with st.spinner("Gemini is thinking & Painting..."):
-                        # 1. Get Text & Image Prompt from Gemini
+                st.caption(f"{article['source']['name']} • {article['publishedAt'][:10]}")
+                if st.button("✨ Create Pro Post", key=article['url']):
+                    with st.spinner("Analyzing & Designing..."):
                         tweet, img_prompt = get_ai_content(article['title'], article['url'])
-                        
-                        # 2. Generate Image URL (using Pollinations.ai - Free/Unlimited)
                         clean_prompt = img_prompt.replace(" ", "%20")
-                        generated_image_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1080&height=1080&nologo=true"
-                        
-                        # 3. Save to Session
+                        # Add 'modern' tag and increase quality
+                        st.session_state.image_url = f"https://image.pollinations.ai/prompt/{clean_prompt}?width=1200&height=675&nologo=true&model=flux"
                         st.session_state.tweet_content = tweet
-                        st.session_state.image_url = generated_image_url
                         st.rerun()
 
-# ==========================
-# LEFT COLUMN: SCHEDULER
-# ==========================
 with col_scheduler:
     st.subheader("📅 Scheduler")
-    
     posts, sha = get_github_data()
     pkt_zone = pytz.timezone('Asia/Karachi')
     utc_zone = pytz.utc
 
     with st.form("schedule_form", clear_on_submit=True):
-        # Text Input (Auto-filled)
         text_input = st.text_area("Tweet Content", value=st.session_state.tweet_content, height=150, max_chars=280)
-        
-        # Image Preview (Auto-filled)
         if st.session_state.image_url:
-            st.image(st.session_state.image_url, caption="AI Generated Image (Right Click to Save)", width=300)
-            st.info("⚠️ Note: To post images automatically, we need to upgrade the backend. For now, save this image and attach manually if posting directly.")
+            st.image(st.session_state.image_url, caption="AI Generated Visual (Save & Attach Manually)", width=400)
 
         st.write("**Schedule Time (PKT)**")
         c1, c2, c3, c4 = st.columns([2,1,1,1])
@@ -185,24 +159,18 @@ with col_scheduler:
         ampm = c4.selectbox("AM/PM", ["AM", "PM"])
         
         if st.form_submit_button("🚀 Schedule Post"):
-            if not text_input:
-                st.warning("Write something first!")
+            if not text_input: st.warning("Write something first!")
             else:
                 h24 = hour_val
                 if ampm == "PM" and hour_val != 12: h24 += 12
                 if ampm == "AM" and hour_val == 12: h24 = 0
-                
                 dt_naive = datetime.combine(date_val, time(h24, min_val))
                 dt_pkt = pkt_zone.localize(dt_naive)
                 dt_utc = dt_pkt.astimezone(utc_zone)
-                
-                # Currently saving TEXT ONLY. 
-                # (Image saving requires backend upgrade, ask me if you want that!)
                 posts.append({"text": text_input, "schedule_time": dt_utc.isoformat()})
                 save_to_github(posts, sha)
-                
                 st.session_state.tweet_content = "" 
-                st.session_state.image_url = "" # Clear image
+                st.session_state.image_url = ""
                 st.success("Scheduled!")
                 st.rerun()
 
@@ -219,4 +187,3 @@ with col_scheduler:
                     posts.pop(i)
                     save_to_github(posts, sha)
                     st.rerun()
-
