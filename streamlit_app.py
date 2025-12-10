@@ -34,21 +34,21 @@ def get_ai_tweet(title, url):
         google_api_key=GOOGLE_API_KEY,
         temperature=0.7
     )
-    
+
     template = """
     You are a professional social media manager.
     Write a viral, engaging tweet about this news story.
-    
+
     Headline: {title}
     Link: {url}
-    
+
     Rules:
     - Must be under 280 characters.
     - Use 2-3 relevant hashtags.
     - Be punchy and exciting.
     - Do NOT start with "Here is a tweet". Just give the text.
     """
-    
+
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm
     return chain.invoke({"title": title, "url": url}).content
@@ -88,17 +88,17 @@ col_scheduler, col_news = st.columns([1, 1]) # Split screen 50/50
 with col_news:
     st.subheader("🕵️ AI News Hunter")
     topic = st.text_input("Search Topic", value="Artificial Intelligence")
-    
+
     if st.button("🔎 Fetch News"):
         news_items = fetch_news(topic)
         st.session_state.news_cache = news_items # Save to keep them on screen
-    
+
     if "news_cache" in st.session_state:
         for article in st.session_state.news_cache:
             with st.container(border=True):
                 st.markdown(f"**{article['title']}**")
                 st.caption(f"Source: {article['source']['name']}")
-                
+
                 # THE MAGIC BUTTON
                 if st.button("✨ Generate Tweet", key=article['url']):
                     with st.spinner("Gemini is writing..."):
@@ -111,7 +111,7 @@ with col_news:
 # ==========================
 with col_scheduler:
     st.subheader("📅 Scheduler")
-    
+
     posts, sha = get_github_data()
     pkt_zone = pytz.timezone('Asia/Karachi')
     utc_zone = pytz.utc
@@ -119,14 +119,14 @@ with col_scheduler:
     with st.form("schedule_form", clear_on_submit=True):
         # The value comes from Session State (Auto-filled by Gemini)
         text_input = st.text_area("Tweet Content", value=st.session_state.tweet_content, height=150, max_chars=280)
-        
+
         st.write("**Schedule Time (PKT)**")
         c1, c2, c3, c4 = st.columns([2,1,1,1])
         date_val = c1.date_input("Date")
         hour_val = c2.selectbox("Hour", range(1, 13))
         min_val = c3.selectbox("Minute", range(0, 60))
         ampm = c4.selectbox("AM/PM", ["AM", "PM"])
-        
+
         if st.form_submit_button("🚀 Schedule Post"):
             if not text_input:
                 st.warning("Write something first!")
@@ -135,16 +135,16 @@ with col_scheduler:
                 h24 = hour_val
                 if ampm == "PM" and hour_val != 12: h24 += 12
                 if ampm == "AM" and hour_val == 12: h24 = 0
-                
+
                 dt_naive = datetime.combine(date_val, time(h24, min_val))
                 dt_pkt = pkt_zone.localize(dt_naive)
                 dt_utc = dt_pkt.astimezone(utc_zone)
-                
+
                 posts.append({"text": text_input, "schedule_time": dt_utc.isoformat()})
                 save_to_github(posts, sha)
-                
+
                 # Clear the box after saving
-                st.session_state.tweet_content = "" 
+                st.session_state.tweet_content = ""
                 st.success("Scheduled!")
                 st.rerun()
 

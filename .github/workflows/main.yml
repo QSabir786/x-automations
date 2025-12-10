@@ -1,33 +1,36 @@
-name: X Auto Poster
+name: Run Tweet Scheduler
 
 on:
   schedule:
-    - cron: '*/5 * * * *' # Runs every 5 minutes (0, 5, 10, 15...)
-  workflow_dispatch:      # Allows manual click to test
+    - cron: '*/5 * * * *' # Check every 5 minutes
+  workflow_dispatch:
+
+# 👇 THIS IS CRITICAL TO REMOVE OLD POSTS
+permissions:
+  contents: write
 
 jobs:
-  post_tweets:
+  run-scheduler:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - name: Set up Python
+        uses: actions/setup-python@v4
         with:
-          python-version: '3.11'
+          python-version: '3.9'
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
       - name: Run Scheduler Script
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }} # Built-in to GitHub
-          GITHUB_OWNER: ${{ github.repository_owner }}
-          GITHUB_REPO: ${{ github.event.repository.name }}
-          # These must be added in GitHub Settings -> Secrets
           TWITTER_CONSUMER_KEY: ${{ secrets.TWITTER_CONSUMER_KEY }}
           TWITTER_CONSUMER_SECRET: ${{ secrets.TWITTER_CONSUMER_SECRET }}
           TWITTER_ACCESS_TOKEN: ${{ secrets.TWITTER_ACCESS_TOKEN }}
           TWITTER_ACCESS_TOKEN_SECRET: ${{ secrets.TWITTER_ACCESS_TOKEN_SECRET }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_OWNER: ${{ github.repository_owner }}
+          GITHUB_REPO: ${{ github.event.repository.name }}
         run: python post_scheduler.py
