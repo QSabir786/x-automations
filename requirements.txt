@@ -5,3 +5,4 @@ pytz
 langchain-google-genai
 langchain-core
 tweepy
+feedparser
