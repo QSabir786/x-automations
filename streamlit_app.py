@@ -54,7 +54,7 @@ def get_ai_content(title, url):
     """Uses Gemini to write a tweet AND an image prompt."""
     try:
         llm = ChatGoogleGenerativeAI(
-            model="gemini-1.5-flash",
+            model="gemini-2.5-flash",
             google_api_key=GOOGLE_API_KEY,
             temperature=0.7
         )
@@ -219,3 +219,4 @@ with col_scheduler:
                     posts.pop(i)
                     save_to_github(posts, sha)
                     st.rerun()
+
