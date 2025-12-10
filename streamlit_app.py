@@ -50,7 +50,7 @@ if "page_selection" not in st.session_state: st.session_state.page_selection = "
 
 def get_gemini_model(temp=0.7):
     return ChatGoogleGenerativeAI(
-        model="gemini-1.5-flash",
+        model="gemini-2.5-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=temp
     )
@@ -247,3 +247,4 @@ elif selection == "Lead Gen Posts":
         with col2:
             if st.button("🚀 Use This Post"):
                 switch_to_scheduler(st.session_state.lead_gen_cache)
+
