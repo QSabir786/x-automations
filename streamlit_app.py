@@ -3,6 +3,7 @@ import requests
 import base64
 import json
 import pytz
+import feedparser # <--- NEW LIBRARY
 import random
 from datetime import datetime, time, timedelta
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -52,7 +53,7 @@ if "lead_gen_suggestions" not in st.session_state: st.session_state.lead_gen_sug
 
 def get_gemini_model(temp=0.7):
     return ChatGoogleGenerativeAI(
-        model="gemini-2.5-flash",
+        model="gemini-1.5-flash",
         google_api_key=GOOGLE_API_KEY,
         temperature=temp
     )
@@ -80,45 +81,41 @@ def switch_to_scheduler(text):
     st.session_state.page_selection = "Post Scheduler"
     st.rerun()
 
-# --- REDDIT SCRAPER FUNCTIONS ---
+# --- REDDIT RSS FETCHER (NEW & STABLE) ---
 
 def fetch_reddit_viral():
-    """Scrapes top viral posts from AI subreddits."""
-    # We hunt in these specific subreddits for "Pain Points" and "Hype"
-    subreddits = "OpenAI+ArtificialIntelligence+SaaS+LocalLLaMA+LangChain"
-    url = f"https://www.reddit.com/r/{subreddits}/top.json?t=week&limit=20"
-    
-    # User-Agent is CRITICAL to avoid being blocked
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"}
+    """Fetches top posts using RSS (No API Key needed, No blocking)."""
+    # RSS URL for Top posts from multiple subreddits
+    rss_url = "https://www.reddit.com/r/OpenAI+ArtificialIntelligence+SaaS+LocalLLaMA+LangChain/top.rss?t=week&limit=25"
     
     try:
-        resp = requests.get(url, headers=headers)
-        if resp.status_code != 200:
-            return []
-        
-        data = resp.json()
+        feed = feedparser.parse(rss_url)
         posts = []
-        for child in data['data']['children']:
-            post = child['data']
-            # Only keep text-heavy posts or good discussions
-            if not post.get('stickied') and len(post.get('title', '')) > 20:
-                posts.append(f"Title: {post['title']}\nDiscussion: {post.get('selftext', '')[:500]}...\nLink: https://reddit.com{post['permalink']}")
+        
+        for entry in feed.entries[:15]: # Analyze top 15
+            # Clean up content (RSS often has HTML)
+            title = entry.title
+            link = entry.link
+            # RSS puts the post body in 'summary' or 'content'
+            content = entry.get("summary", "")[:500] 
+            
+            posts.append(f"Title: {title}\nSummary: {content}\nLink: {link}")
+            
         return posts
     except Exception as e:
-        st.error(f"Reddit Error: {e}")
+        st.error(f"RSS Error: {e}")
         return []
 
 def generate_10_lead_posts(reddit_data):
     """Uses Gemini to turn Reddit threads into 10 B2B Lead Gen posts."""
     llm = get_gemini_model(temp=0.8)
     
-    # We pass the raw Reddit text and ask for a JSON list of 10 tweets
     template = """
     You are an elite B2B Social Media Ghostwriter.
     I will give you a list of viral Reddit discussions about AI, SaaS, and Tech.
     
     TASK:
-    Analyze the "Pain Points" or "Viral News" in these Reddit threads.
+    Analyze the "Pain Points", "News", or "Debates" in these Reddit threads.
     Create 10 DISTINCT "Lead Gen" tweets based on them.
     
     STYLE RULES:
@@ -142,7 +139,7 @@ def generate_10_lead_posts(reddit_data):
     chain = prompt | llm | JsonOutputParser()
     
     # Join Reddit posts into one big string for analysis
-    context = "\n\n".join(reddit_data[:15]) 
+    context = "\n\n".join(reddit_data) 
     return chain.invoke({"reddit_data": context})
 
 def generate_news_tweet(title, url):
@@ -211,6 +208,7 @@ if selection == "Post Scheduler":
                 
                 posts.append({"text": text_input, "schedule_time": dt_utc.isoformat()})
                 save_to_github(posts, sha)
+                
                 st.session_state.tweet_content = "" 
                 st.success(f"Scheduled for {hour_val}:{min_val:02d} {ampm} PKT")
                 st.rerun()
@@ -232,18 +230,18 @@ if selection == "Post Scheduler":
 # --- PAGE 2: LEAD GEN (REDDIT SCRAPER) ---
 elif selection == "Lead Gen (Reddit Scraper)":
     st.title("⚡ Viral Lead Gen Generator")
-    st.caption("Scrapes r/OpenAI, r/SaaS, r/LocalLLaMA for viral pain points.")
+    st.caption("Scrapes r/OpenAI, r/SaaS, r/LocalLLaMA for viral pain points (via RSS).")
     
     if st.button("🎲 Fetch Viral Reddit Threads & Generate 10 Posts"):
-        with st.spinner("Scraping Reddit... Reading Threads... Generating Hooks..."):
-            # 1. Get Real Data
+        with st.spinner("Reading Reddit Feeds... Generating Hooks..."):
+            # 1. Get Real Data via RSS
             reddit_threads = fetch_reddit_viral()
             if reddit_threads:
                 # 2. AI Magic
                 suggestions = generate_10_lead_posts(reddit_threads)
                 st.session_state.lead_gen_suggestions = suggestions
             else:
-                st.error("Failed to fetch Reddit data. Try again in 1 minute.")
+                st.error("Failed to fetch Reddit data. RSS might be down.")
 
     # DISPLAY THE 10 SUGGESTIONS
     if st.session_state.lead_gen_suggestions:
@@ -257,8 +255,8 @@ elif selection == "Lead Gen (Reddit Scraper)":
                     st.text_area("Draft", value=post['tweet'], height=100, key=f"draft_{idx}", disabled=True)
                     st.caption(f"Inspired by Reddit: *{post.get('source', 'Unknown')}*")
                 with c2:
-                    st.write("") # Spacer
-                    st.write("") # Spacer
+                    st.write("") 
+                    st.write("")
                     if st.button("🚀 Use This", key=f"use_{idx}"):
                         switch_to_scheduler(post['tweet'])
 
@@ -279,4 +277,3 @@ elif selection == "AI News Hunter":
                     with st.spinner("Analyzing..."):
                         tweet = generate_news_tweet(article['title'], article['url'])
                         switch_to_scheduler(tweet)
-
