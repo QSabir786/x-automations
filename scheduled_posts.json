@@ -1,10 +1,5 @@
 [
   {
-    "text": "Passive learning is a trap.\n\n\u274c The Old Way: Watch 10 hours of video -> Feel smart -> Build nothing. \u2705 The New Way: Build garbage -> Break it -> Fix it -> Learn.\n\nYou cannot theory-craft your way to seniority.",
-    "schedule_time": "2025-12-13T05:07:00+00:00",
-    "image_data": null
-  },
-  {
     "text": "Why this mindset wins:\n\nJunior devs optimize for \"clean code\" on their first try (Perfectionism). Senior devs optimize for shipping, breaking, and refactoring (Iteration).\n\nYou can't steer a parked car. Get moving.",
     "schedule_time": "2025-12-13T05:08:00+00:00",
     "image_data": null
