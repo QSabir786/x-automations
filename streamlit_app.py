@@ -5,6 +5,7 @@ import json
 import pytz
 import feedparser
 import random
+import uuid # <--- NEW: To track threads
 from datetime import datetime, time, timedelta
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.prompts import ChatPromptTemplate
@@ -49,7 +50,7 @@ if "page_selection" not in st.session_state: st.session_state.page_selection = "
 if "lead_gen_suggestions" not in st.session_state: st.session_state.lead_gen_suggestions = []
 if "news_suggestions" not in st.session_state: st.session_state.news_suggestions = []
 if "remix_suggestions" not in st.session_state: st.session_state.remix_suggestions = []
-if "thread_drafts" not in st.session_state: st.session_state.thread_drafts = [] # Store thread parts
+if "thread_drafts" not in st.session_state: st.session_state.thread_drafts = []
 
 # --- HELPER FUNCTIONS ---
 
@@ -104,25 +105,13 @@ def fetch_reddit_tech_news():
     except: return []
 
 # --- AI GENERATORS ---
-
 def process_thread_text(raw_text):
-    """Splits raw text into tweets and AUTO-RESIZES to <280 chars."""
     llm = get_gemini_model(temp=0.3)
     template = """
     You are a Twitter Thread Editor.
-    I will give you a raw text block representing a thread.
-    
-    TASK:
-    1. Split this text into individual tweets.
-    2. CHECK THE LENGTH of each tweet.
-    3. IF a tweet is > 280 characters, REWRITE IT to be shorter/concise while keeping the meaning.
-    4. IF a tweet is < 280, keep it as is.
-    
-    RAW TEXT:
-    {raw_text}
-    
-    OUTPUT FORMAT (JSON List of Strings):
-    ["Tweet 1 content...", "Tweet 2 content...", "Tweet 3..."]
+    TASK: Split text into tweets. If >280 chars, rewrite to shorter.
+    RAW TEXT: {raw_text}
+    OUTPUT JSON: ["Tweet 1", "Tweet 2"]
     """
     prompt = ChatPromptTemplate.from_template(template)
     chain = prompt | llm | JsonOutputParser()
@@ -146,9 +135,9 @@ def generate_remix_batch(raw_text):
 def generate_lead_posts_batch(reddit_data):
     llm = get_gemini_model(temp=0.8)
     template = """
-    You are a Viral B2B Ghostwriter. Read these Reddit threads and create 10 DISTINCT "Lead Gen" tweets.
+    You are a Viral B2B Ghostwriter. Create 10 DISTINCT "Lead Gen" tweets.
     STRICT RULES:
-    1. LENGTH: MUST be under 280 characters.
+    1. LENGTH: MUST be under 280 chars.
     2. STYLE: Hook -> Pain Point -> Solution -> CTA.
     INPUT: {reddit_data}
     OUTPUT JSON: [{{ "topic": "...", "tweet": "...", "source": "..." }}]
@@ -160,9 +149,9 @@ def generate_lead_posts_batch(reddit_data):
 def generate_news_posts_batch(reddit_data):
     llm = get_gemini_model(temp=0.6)
     template = """
-    You are a Tech Influencer. Read these Reddit headlines and create 10 News Tweets.
+    You are a Tech Influencer. Create 10 News Tweets.
     STRICT RULES:
-    1. LENGTH: MUST be under 280 characters.
+    1. LENGTH: MUST be under 280 chars.
     INPUT: {reddit_data}
     OUTPUT JSON: [{{ "topic": "AI News", "tweet": "...", "source": "..." }}]
     """
@@ -185,9 +174,11 @@ if selection == "Post Scheduler":
     pkt_zone = pytz.timezone('Asia/Karachi')
     utc_zone = pytz.utc
 
+    # --- 1. NEW TWEET FORM ---
     with st.form("schedule_form", clear_on_submit=True):
         text_input = st.text_area("Tweet Content", value=st.session_state.tweet_content, height=150, max_chars=280)
         st.caption(f"Chars: {len(text_input)}/280")
+        
         uploaded_file = st.file_uploader("📷 Attach Image (Optional)", type=["png", "jpg", "jpeg"])
         
         st.write("**Schedule Time (PKT)**")
@@ -213,73 +204,116 @@ if selection == "Post Scheduler":
                     b64 = base64.b64encode(bytes_data).decode('utf-8')
                     image_data = f"data:image/png;base64,{b64}"
 
-                posts.append({"text": text_input, "schedule_time": dt_utc.isoformat(), "image_data": image_data})
+                # No thread_id for single posts
+                posts.append({"text": text_input, "schedule_time": dt_utc.isoformat(), "image_data": image_data, "thread_id": None})
                 save_to_github(posts, sha)
                 st.session_state.tweet_content = "" 
                 st.success("Scheduled!")
                 st.rerun()
 
     st.divider()
-    st.subheader(f"Queue ({len(posts)})")
+    
+    # --- 2. SMART QUEUE (GROUPED THREADS) ---
+    st.subheader(f"Queue ({len(posts)} Tweets)")
+    
     if posts:
+        # Sort by time
         posts.sort(key=lambda x: x['schedule_time'])
+        
+        # Group posts by thread_id
+        grouped_posts = []
+        processed_indices = set()
+        
         for i, p in enumerate(posts):
-            dt_utc = datetime.fromisoformat(p['schedule_time'])
-            dt_pkt = dt_utc.astimezone(pkt_zone)
-            with st.expander(f"{dt_pkt.strftime('%I:%M %p')} - {p['text'][:30]}..."):
-                st.text(p['text'])
-                if p.get("image_data"): st.image(p["image_data"], width=150)
-                if st.button("Delete", key=f"d_{i}"):
-                    posts.pop(i)
-                    save_to_github(posts, sha)
-                    st.rerun()
+            if i in processed_indices: continue
+            
+            t_id = p.get("thread_id")
+            
+            # If it has a thread_id, find all siblings
+            if t_id:
+                thread_siblings = []
+                for j, sibling in enumerate(posts):
+                    if sibling.get("thread_id") == t_id:
+                        thread_siblings.append((j, sibling)) # Store index and post
+                        processed_indices.add(j)
+                grouped_posts.append({"type": "thread", "items": thread_siblings})
+            else:
+                # Normal single post
+                grouped_posts.append({"type": "single", "items": [(i, p)]})
+                processed_indices.add(i)
 
-# --- PAGE 2: THREAD CREATOR (NEW!) ---
+        # RENDER THE QUEUE
+        for group in grouped_posts:
+            # --- RENDER SINGLE POST ---
+            if group["type"] == "single":
+                idx, p = group["items"][0]
+                dt_utc = datetime.fromisoformat(p['schedule_time'])
+                dt_pkt = dt_utc.astimezone(pkt_zone)
+                
+                with st.expander(f"📝 {dt_pkt.strftime('%I:%M %p')} - {p['text'][:30]}..."):
+                    st.text(p['text'])
+                    if p.get("image_data"): st.image(p["image_data"], width=150)
+                    if st.button("Delete", key=f"del_{idx}"):
+                        posts.pop(idx)
+                        save_to_github(posts, sha)
+                        st.rerun()
+            
+            # --- RENDER THREAD ---
+            elif group["type"] == "thread":
+                first_idx, first_p = group["items"][0]
+                dt_utc = datetime.fromisoformat(first_p['schedule_time'])
+                dt_pkt = dt_utc.astimezone(pkt_zone)
+                count = len(group["items"])
+                
+                with st.expander(f"🧵 THREAD ({count} Tweets) - Starts {dt_pkt.strftime('%I:%M %p')}"):
+                    st.info("These tweets are linked and scheduled 1 minute apart.")
+                    
+                    for sub_idx, sub_p in group["items"]:
+                        st.markdown(f"**Tweet:**")
+                        st.text(sub_p['text'])
+                        if sub_p.get("image_data"): st.image(sub_p["image_data"], width=100)
+                        st.divider()
+                    
+                    if st.button(f"🗑️ Delete Entire Thread", key=f"del_thread_{first_idx}"):
+                        # Remove all items in this thread (reverse order to avoid index shift issues)
+                        indices_to_remove = sorted([x[0] for x in group["items"]], reverse=True)
+                        for rm_idx in indices_to_remove:
+                            posts.pop(rm_idx)
+                        save_to_github(posts, sha)
+                        st.rerun()
+
+# --- PAGE 2: THREAD CREATOR ---
 elif selection == "Thread Creator (New)":
     st.title("🧵 Thread Master")
-    st.caption("Paste a long thread -> AI splits & fixes size -> You schedule it.")
+    raw_thread = st.text_area("Paste Full Thread:", height=200)
 
-    raw_thread = st.text_area("Paste Full Thread Here:", height=200, placeholder="1/ This is the start...\n2/ This is the next part...")
-
-    if st.button("✂️ Split & Process Thread"):
-        if not raw_thread:
-            st.warning("Paste text first.")
-        else:
-            with st.spinner("Splitting & Checking Lengths..."):
-                # AI does the heavy lifting
+    if st.button("✂️ Process"):
+        if raw_thread:
+            with st.spinner("Processing..."):
                 st.session_state.thread_drafts = process_thread_text(raw_thread)
     
-    # Show the drafts
     if st.session_state.thread_drafts:
         st.divider()
-        st.subheader("📝 Review & Schedule")
-        
-        # We need a form to collect all changes at once
         with st.form("thread_form"):
             updated_texts = []
             updated_images = []
-            
-            for idx, draft_text in enumerate(st.session_state.thread_drafts):
+            for idx, draft in enumerate(st.session_state.thread_drafts):
                 st.markdown(f"**Tweet {idx+1}**")
-                # Editable text box
-                txt = st.text_area(f"Content {idx+1}", value=draft_text, height=100, key=f"t_{idx}")
-                # Optional Image
-                img = st.file_uploader(f"Image for Tweet {idx+1}", type=['png', 'jpg'], key=f"i_{idx}")
-                
+                txt = st.text_area(f"T{idx+1}", value=draft, height=100, key=f"t_{idx}")
+                img = st.file_uploader(f"Img {idx+1}", type=['png', 'jpg'], key=f"i_{idx}")
                 updated_texts.append(txt)
                 updated_images.append(img)
                 st.caption(f"Chars: {len(txt)}/280")
                 st.write("---")
 
-            st.write("### 🕒 Schedule Start Time")
+            st.write("### 🕒 Schedule Start")
             c1, c2, c3, c4 = st.columns([2,1,1,1])
             date_val = c1.date_input("Date")
             hour_val = c2.selectbox("Hour", range(1, 13))
             min_val = c3.selectbox("Minute", range(0, 60))
             ampm = c4.selectbox("AM/PM", ["AM", "PM"])
 
-            if st.form_submit_button("🚀 Schedule Full Thread"):
-                # Calculate Start Time
+            if st.form_submit_button("🚀 Schedule Thread"):
                 h24 = hour_val
                 if ampm == "PM" and hour_val != 12: h24 += 12
                 if ampm == "AM" and hour_val == 12: h24 = 0
@@ -289,13 +323,12 @@ elif selection == "Thread Creator (New)":
                 dt_naive = datetime.combine(date_val, time(h24, min_val))
                 start_dt_pkt = pkt_zone.localize(dt_naive)
                 
-                # GET CURRENT DATA
                 posts, sha = get_github_data()
                 
-                # LOOP AND SCHEDULE
+                # GENERATE A UNIQUE THREAD ID
+                new_thread_id = str(uuid.uuid4())
+                
                 for i, (txt, img_file) in enumerate(zip(updated_texts, updated_images)):
-                    # Time Logic: Each tweet is scheduled 1 minute apart
-                    # This ensures they post in order!
                     post_time = start_dt_pkt + timedelta(minutes=i)
                     post_time_utc = post_time.astimezone(utc_zone)
                     
@@ -307,40 +340,33 @@ elif selection == "Thread Creator (New)":
                     posts.append({
                         "text": txt,
                         "schedule_time": post_time_utc.isoformat(),
-                        "image_data": image_data
+                        "image_data": image_data,
+                        "thread_id": new_thread_id # <--- LINK THEM TOGETHER
                     })
                 
                 save_to_github(posts, sha)
-                st.success(f"✅ Thread of {len(updated_texts)} tweets scheduled starting {hour_val}:{min_val:02d} {ampm}!")
-                st.session_state.thread_drafts = [] # Clear
+                st.success("✅ Thread Scheduled!")
+                st.session_state.thread_drafts = []
                 st.rerun()
 
-# --- PAGE 3: FEED REMIX ---
+# --- OTHER PAGES (FEED REMIX / LEAD GEN / NEWS) ---
+# (Keeping these simple and robust)
 elif selection == "Feed Remix":
     st.title("♻️ Feed Remix")
-    raw_text = st.text_area("Paste Raw Feed Text:", height=150)
-    if raw_text: st.caption(f"Stats: {len(raw_text)} chars")
-    
-    if st.button("✨ Remix"):
-        if raw_text:
-            with st.spinner("Remixing..."):
-                st.session_state.remix_suggestions = generate_remix_batch(raw_text)
-
+    raw = st.text_area("Paste Feed Text:", height=150)
+    if st.button("✨ Remix") and raw:
+        st.session_state.remix_suggestions = generate_remix_batch(raw)
     if st.session_state.remix_suggestions:
-        for idx, post in enumerate(st.session_state.remix_suggestions):
+        for idx, p in enumerate(st.session_state.remix_suggestions):
             with st.container(border=True):
-                c1, c2 = st.columns([4,1])
-                c1.write(post['tweet'])
-                if c2.button("🚀 Use", key=f"rm_{idx}"): switch_to_scheduler(post['tweet'])
+                st.write(p['tweet'])
+                if st.button("🚀 Use", key=f"rm_{idx}"): switch_to_scheduler(p['tweet'])
 
-# --- PAGE 4 & 5: LEAD GEN / NEWS ---
 elif selection == "Lead Gen":
-    st.title("⚡ Viral Lead Gen")
-    if st.button("🎲 Fetch Reddit"):
-        with st.spinner("Analyzing..."):
-            threads = fetch_reddit_viral_lead_gen()
-            if threads: st.session_state.lead_gen_suggestions = generate_lead_posts_batch(threads)
-    
+    st.title("⚡ Lead Gen")
+    if st.button("🎲 Fetch"):
+        th = fetch_reddit_viral_lead_gen()
+        if th: st.session_state.lead_gen_suggestions = generate_lead_posts_batch(th)
     if st.session_state.lead_gen_suggestions:
         for idx, p in enumerate(st.session_state.lead_gen_suggestions):
             with st.container(border=True):
@@ -349,11 +375,9 @@ elif selection == "Lead Gen":
 
 elif selection == "Tech News":
     st.title("🤖 AI News")
-    if st.button("🔄 Fetch News"):
-        with st.spinner("Fetching..."):
-            threads = fetch_reddit_tech_news()
-            if threads: st.session_state.news_suggestions = generate_news_posts_batch(threads)
-    
+    if st.button("🔄 Fetch"):
+        th = fetch_reddit_tech_news()
+        if th: st.session_state.news_suggestions = generate_news_posts_batch(th)
     if st.session_state.news_suggestions:
         for idx, p in enumerate(st.session_state.news_suggestions):
             with st.container(border=True):
